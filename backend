@@ -1,0 +1,138 @@
+# database_ops.py
+import psycopg2
+import pandas as pd
+from contextlib import contextmanager
+
+# Use the database details provided by the user
+DB_DETAILS = {
+    "host": "localhost",
+    "database": "app_runfinal",
+    "user": "postgres",
+    "password": "6465"
+}
+
+@contextmanager
+def get_db_connection():
+    """Provides a connection to the PostgreSQL database using a context manager."""
+    conn = None
+    try:
+        conn = psycopg2.connect(**DB_DETAILS)
+        yield conn
+    except psycopg2.OperationalError as e:
+        print(f"Database connection error: {e}")
+        conn = None
+    finally:
+        if conn:
+            conn.close()
+
+def create_db_and_table():
+    """Creates the 'transactions' table in the database if it doesn't exist."""
+    with get_db_connection() as conn:
+        if conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS transactions (
+                            transaction_id VARCHAR(255) PRIMARY KEY,
+                            transaction_date DATE NOT NULL,
+                            description TEXT,
+                            amount DECIMAL(10, 2) NOT NULL,
+                            type VARCHAR(20) -- 'Revenue' or 'Expense'
+                        );
+                    """)
+                    conn.commit()
+                    print("Table 'transactions' created or already exists.")
+                except psycopg2.Error as e:
+                    print(f"Error creating table: {e}")
+                    conn.rollback()
+
+def fetch_data(query, params=None):
+    """Fetches data from the database into a pandas DataFrame."""
+    with get_db_connection() as conn:
+        if conn:
+            try:
+                # Use pd.read_sql for convenience and efficiency
+                df = pd.read_sql(query, conn, params=params)
+                return df
+            except pd.io.sql.DatabaseError as e:
+                print(f"SQL query error: {e}")
+                return pd.DataFrame()
+        return pd.DataFrame()
+
+def insert_transaction(transaction_data):
+    """Inserts a new transaction into the database."""
+    query = """
+    INSERT INTO transactions (transaction_id, transaction_date, description, amount, type)
+    VALUES (%s, %s, %s, %s, %s);
+    """
+    with get_db_connection() as conn:
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute(query, transaction_data)
+                conn.commit()
+                return True
+            except psycopg2.errors.UniqueViolation:
+                print(f"Error: Transaction with ID '{transaction_data[0]}' already exists.")
+                conn.rollback()
+                return False
+            except psycopg2.Error as e:
+                print(f"Error adding transaction: {e}")
+                conn.rollback()
+                return False
+
+def update_transaction(transaction_id, data):
+    """Updates an existing transaction in the database."""
+    query = """
+        UPDATE transactions
+        SET transaction_date = %s, description = %s, amount = %s, type = %s
+        WHERE transaction_id = %s;
+    """
+    with get_db_connection() as conn:
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute(query, data + (transaction_id,))
+                conn.commit()
+                return cur.rowcount > 0
+            except psycopg2.Error as e:
+                print(f"Error updating transaction: {e}")
+                conn.rollback()
+                return False
+
+def delete_transaction(transaction_id):
+    """Deletes a transaction from the database."""
+    query = "DELETE FROM transactions WHERE transaction_id = %s;"
+    with get_db_connection() as conn:
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute(query, (transaction_id,))
+                conn.commit()
+                return cur.rowcount > 0
+            except psycopg2.Error as e:
+                print(f"Error deleting transaction: {e}")
+                conn.rollback()
+                return False
+
+def get_aggregates():
+    """Calculates aggregate financial data directly from the database."""
+    query = """
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(CASE WHEN type = 'Revenue' THEN amount ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN type = 'Expense' THEN amount ELSE 0 END), 0)
+        FROM transactions;
+    """
+    with get_db_connection() as conn:
+        if conn:
+            try:
+                cur = conn.cursor()
+                cur.execute(query)
+                count, revenue, expense = cur.fetchone()
+                net_income = revenue - expense
+                return count, revenue, expense, net_income
+            except psycopg2.Error as e:
+                print(f"Error fetching aggregates: {e}")
+                return 0, 0, 0, 0
+        return 0, 0, 0, 0
