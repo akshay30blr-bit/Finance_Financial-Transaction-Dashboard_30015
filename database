@@ -1,0 +1,7 @@
+CREATE TABLE transactions (
+    transaction_id VARCHAR(255) PRIMARY KEY,
+    transaction_date DATE NOT NULL,
+    description TEXT,
+    amount DECIMAL(10, 2) NOT NULL,
+    type VARCHAR(20) -- 'Revenue' or 'Expense'
+);
